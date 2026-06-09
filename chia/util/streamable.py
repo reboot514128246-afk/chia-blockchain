@@ -410,6 +410,7 @@ def parse_rust(f: BinaryIO, f_type: type[Any]) -> Any:
 
 def parse_bytes(f: BinaryIO) -> bytes:
     list_size = parse_uint32(f)
+    if list_size > 100_000_000: raise ValueError("List size exceeds limit")
     bytes_read = f.read(list_size)
     assert bytes_read is not None and len(bytes_read) == list_size
     return bytes_read
@@ -419,6 +420,7 @@ def parse_list(f: BinaryIO, parse_inner_type_f: ParseFunctionType) -> list[objec
     full_list: list[object] = []
     # wjb assert inner_type != get_args(List)[0]
     list_size = parse_uint32(f)
+    if list_size > 100_000_000: raise ValueError("List size exceeds limit")
     for list_index in range(list_size):
         full_list.append(parse_inner_type_f(f))
     return full_list
@@ -432,6 +434,7 @@ def parse_list_limited(
 ) -> object:
     """Parse a list, stopping after max_items and seeking past the remainder."""
     list_size = parse_uint32(f)
+    if list_size > 100_000_000: raise ValueError("List size exceeds limit")
     items_to_parse = min(list_size, max_items)
     full_list: list[object] = []
     for _ in range(items_to_parse):
@@ -468,6 +471,7 @@ def parse_dict(
 
 def parse_str(f: BinaryIO) -> str:
     str_size = parse_uint32(f)
+    if str_size > 100_000_000: raise ValueError("String size exceeds limit")
     str_read_bytes = f.read(str_size)
     assert str_read_bytes is not None and len(str_read_bytes) == str_size  # Checks for EOF
     return bytes.decode(str_read_bytes, "utf-8")

